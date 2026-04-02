@@ -100,7 +100,7 @@ class CWMApp(App[None]):
         with Horizontal(id="workspace"):
             yield BoardTable(id="boards")
             with Vertical(id="center"):
-                yield TicketTable(id="tickets")
+                yield TicketTable(id="tickets", column_keys=self.settings.columns)
             yield TicketDetailView(id="detail")
         with Horizontal(id="bottom-bar"):
             yield StatusBar(id="status")

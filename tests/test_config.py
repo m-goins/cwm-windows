@@ -177,6 +177,35 @@ class TestLoadSettings:
         settings = load_settings()
         assert settings.refresh_interval_seconds == 0
 
+    def test_columns_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for key, value in self.REQUIRED_ENV.items():
+            monkeypatch.setenv(key, value)
+        settings = load_settings()
+        assert settings.columns == [
+            "opened", "id", "pri", "age", "status", "company", "summary", "tech", "contact", "sla", "updated",
+        ]
+
+    def test_columns_custom_order(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for key, value in self.REQUIRED_ENV.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setenv("CWM_COLUMNS", "id,company,summary,status,tech")
+        settings = load_settings()
+        assert settings.columns == ["id", "company", "summary", "status", "tech"]
+
+    def test_columns_invalid_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for key, value in self.REQUIRED_ENV.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setenv("CWM_COLUMNS", "id,bogus,summary,fake")
+        settings = load_settings()
+        assert settings.columns == ["id", "summary"]
+
+    def test_columns_all_invalid_falls_back_to_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for key, value in self.REQUIRED_ENV.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setenv("CWM_COLUMNS", "bogus,fake")
+        settings = load_settings()
+        assert len(settings.columns) == 11
+
     def test_connectwise_auth_prefix_extracts_company(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for key in self.REQUIRED_ENV:
             monkeypatch.delenv(key, raising=False)

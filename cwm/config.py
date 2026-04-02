@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,9 @@ class Settings:
     log_path: str = str(Path.home() / ".local" / "state" / "cwm" / "cwm.log")
     log_level: str = "DEBUG"
     refresh_interval_seconds: int = 0
+    columns: list[str] = field(default_factory=lambda: [
+        "opened", "id", "pri", "age", "status", "company", "summary", "tech", "contact", "sla", "updated",
+    ])
 
     @property
     def masked_summary(self) -> str:
@@ -165,6 +168,19 @@ def load_settings(config_path: str | None = None) -> Settings:
     except ValueError:
         refresh_interval = 0
 
+    default_columns = ["opened", "id", "pri", "age", "status", "company", "summary", "tech", "contact", "sla", "updated"]
+    valid_columns = set(default_columns)
+    columns_raw = _first_nonempty(
+        env.get("CWM_COLUMNS"),
+        file_config.get("CWM_COLUMNS"),
+        file_config.get("columns"),
+    )
+    if columns_raw:
+        parsed = [col.strip().lower() for col in columns_raw.split(",") if col.strip()]
+        columns = [col for col in parsed if col in valid_columns] or list(default_columns)
+    else:
+        columns = list(default_columns)
+
     missing = [
         name
         for name, value in [
@@ -194,4 +210,5 @@ def load_settings(config_path: str | None = None) -> Settings:
         log_path=log_path,
         log_level=log_level,
         refresh_interval_seconds=refresh_interval,
+        columns=columns,
     )

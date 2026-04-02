@@ -8,6 +8,29 @@ from textual.widgets import DataTable, Static
 
 from .models import Board, TicketDetail, TicketSummary
 
+COLUMN_DEFS: dict[str, tuple[str, str]] = {
+    "opened": ("Opened", "date_entered"),
+    "id": ("ID", "id"),
+    "pri": ("Pri", "priority_badge"),
+    "age": ("Age", "age_badge"),
+    "status": ("Status", "status_name"),
+    "company": ("Company", "company_name"),
+    "summary": ("Summary", "summary"),
+    "tech": ("Tech", "owner_name"),
+    "contact": ("Contact", "contact_name"),
+    "sla": ("SLA", "sla_badge"),
+    "updated": ("Updated", "last_updated"),
+}
+
+
+def _cell_value(ticket: TicketSummary, attr: str, is_selected: bool) -> str:
+    if attr == "id":
+        return f"*{ticket.id}" if is_selected else str(ticket.id)
+    value = getattr(ticket, attr, "")
+    if attr == "contact_name":
+        return value or "-"
+    return value if value is not None else "-"
+
 
 class BoardTable(DataTable):
     def __init__(self, *args, **kwargs) -> None:
@@ -25,11 +48,13 @@ class BoardTable(DataTable):
 
 
 class TicketTable(DataTable):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args, column_keys: list[str] | None = None, **kwargs) -> None:
         super().__init__(*args, cursor_type="row", zebra_stripes=True, **kwargs)
+        self._column_keys = column_keys or list(COLUMN_DEFS.keys())
 
     def on_mount(self) -> None:
-        self.add_columns("Opened", "ID", "Pri", "Age", "Status", "Company", "Summary", "Tech", "Contact", "SLA", "Updated")
+        headers = [COLUMN_DEFS[key][0] for key in self._column_keys if key in COLUMN_DEFS]
+        self.add_columns(*headers)
 
     def set_tickets(
         self,
@@ -39,22 +64,11 @@ class TicketTable(DataTable):
     ) -> None:
         self.clear(columns=False)
         marks = selected_ids or set()
+        attrs = [COLUMN_DEFS[key][1] for key in self._column_keys if key in COLUMN_DEFS]
         for ticket in tickets:
-            id_label = f"*{ticket.id}" if ticket.id in marks else str(ticket.id)
-            self.add_row(
-                ticket.date_entered,
-                id_label,
-                ticket.priority_badge,
-                ticket.age_badge,
-                ticket.status_name,
-                ticket.company_name,
-                ticket.summary,
-                ticket.owner_name,
-                ticket.contact_name or "-",
-                ticket.sla_badge,
-                ticket.last_updated,
-                key=str(ticket.id),
-            )
+            is_selected = ticket.id in marks
+            row = [_cell_value(ticket, attr, is_selected) for attr in attrs]
+            self.add_row(*row, key=str(ticket.id))
         if tickets:
             row_index = 0
             if selected_ticket_id is not None:
