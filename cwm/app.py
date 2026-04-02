@@ -190,15 +190,11 @@ class CWMApp(App[None]):
         window = f"{ticket_count} shown (limit {self.state.ticket_limit})"
         if ticket_count >= self.state.ticket_limit:
             window = f"first {ticket_count} shown"
+        selected_label = f"#{selected}" if selected is not None else "-"
         context = (
             f"board: {self._active_board_name()} | status(/): {status_filter} | company(/): {company_filter} | "
             f"tech(/): {tech_filter} | sla(x): {sla_filter} | sort(o/u/i): {sort_summary} | window([ ]): {window} | "
-            f"selected: #{selected}"
-            if selected is not None
-            else
-            f"board: {self._active_board_name()} | status(/): {status_filter} | company(/): {company_filter} | "
-            f"tech(/): {tech_filter} | sla(x): {sla_filter} | sort(o/u/i): {sort_summary} | window([ ]): {window} | "
-            "selected: -"
+            f"selected: {selected_label}"
         )
         try:
             self.query_one(QueueBar).set_context(context)

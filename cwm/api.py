@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from datetime import datetime, timedelta, timezone
@@ -220,9 +221,11 @@ class ConnectWiseAPI:
         return entries
 
     async def load_ticket_detail(self, ticket_id: int) -> TicketDetail:
-        ticket_payload = await self.get_ticket(ticket_id)
-        notes = await self.list_ticket_notes(ticket_id, all_notes=True)
-        time_entries = await self.list_ticket_time_entries(ticket_id)
+        ticket_payload, notes, time_entries = await asyncio.gather(
+            self.get_ticket(ticket_id),
+            self.list_ticket_notes(ticket_id, all_notes=True),
+            self.list_ticket_time_entries(ticket_id),
+        )
         logger.info("Loaded ticket detail for ticket=%s", ticket_id)
         return TicketDetail.from_api(ticket_payload, notes, time_entries)
 
