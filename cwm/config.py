@@ -27,10 +27,24 @@ class Settings:
     columns: list[str] = field(default_factory=lambda: [
         "opened", "id", "pri", "age", "status", "company", "summary", "tech", "contact", "sla", "updated",
     ])
+    oauth_auth_url: str = ""
+    oauth_token_url: str = ""
+    oauth_client_id: str = ""
+    oauth_client_secret: str = ""
+    oauth_scopes: str = ""
+
+    @property
+    def has_oauth(self) -> bool:
+        return bool(self.oauth_auth_url and self.oauth_token_url and self.oauth_client_id)
+
+    @property
+    def has_api_keys(self) -> bool:
+        return bool(self.public_key and self.private_key)
 
     @property
     def masked_summary(self) -> str:
-        return f"{self.base_url} as {self.company_id}"
+        auth_mode = "oauth" if self.has_oauth else "api-keys"
+        return f"{self.base_url} as {self.company_id} ({auth_mode})"
 
 
 def _read_json_config(path: Path | None) -> dict[str, Any]:
@@ -181,29 +195,62 @@ def load_settings(config_path: str | None = None) -> Settings:
     else:
         columns = list(default_columns)
 
-    missing = [
+    oauth_auth_url = _first_nonempty(
+        env.get("CWM_OAUTH_AUTH_URL"),
+        file_config.get("CWM_OAUTH_AUTH_URL"),
+        file_config.get("oauth_auth_url"),
+    ) or ""
+    oauth_token_url = _first_nonempty(
+        env.get("CWM_OAUTH_TOKEN_URL"),
+        file_config.get("CWM_OAUTH_TOKEN_URL"),
+        file_config.get("oauth_token_url"),
+    ) or ""
+    oauth_client_id = _first_nonempty(
+        env.get("CWM_OAUTH_CLIENT_ID"),
+        file_config.get("CWM_OAUTH_CLIENT_ID"),
+        file_config.get("oauth_client_id"),
+    ) or ""
+    oauth_client_secret = _first_nonempty(
+        env.get("CWM_OAUTH_CLIENT_SECRET"),
+        file_config.get("CWM_OAUTH_CLIENT_SECRET"),
+        file_config.get("oauth_client_secret"),
+    ) or ""
+    oauth_scopes = _first_nonempty(
+        env.get("CWM_OAUTH_SCOPES"),
+        file_config.get("CWM_OAUTH_SCOPES"),
+        file_config.get("oauth_scopes"),
+    ) or ""
+
+    has_oauth = bool(oauth_auth_url and oauth_token_url and oauth_client_id)
+    has_api_keys = bool(public_key and private_key)
+
+    always_required = [
         name
         for name, value in [
             ("base_url", base_url),
             ("company_id", company_id),
-            ("public_key", public_key),
-            ("private_key", private_key),
             ("client_id", client_id),
         ]
         if not value
     ]
-    if missing:
+    if always_required:
         raise ConfigError(
             "Missing required ConnectWise config values: "
-            + ", ".join(missing)
+            + ", ".join(always_required)
             + ". Set CWM_* env vars or use --config."
+        )
+    if not has_oauth and not has_api_keys:
+        raise ConfigError(
+            "No authentication configured. Provide CWM_PUBLIC_KEY/CWM_PRIVATE_KEY "
+            "for API key auth, or CWM_OAUTH_AUTH_URL/CWM_OAUTH_TOKEN_URL/CWM_OAUTH_CLIENT_ID "
+            "for OAuth."
         )
 
     return Settings(
         base_url=base_url.rstrip("/"),
         company_id=company_id,
-        public_key=public_key,
-        private_key=private_key,
+        public_key=public_key or "",
+        private_key=private_key or "",
         client_id=client_id,
         member_identifier=member_identifier,
         verify_ssl=verify_ssl,
@@ -211,4 +258,9 @@ def load_settings(config_path: str | None = None) -> Settings:
         log_level=log_level,
         refresh_interval_seconds=refresh_interval,
         columns=columns,
+        oauth_auth_url=oauth_auth_url,
+        oauth_token_url=oauth_token_url,
+        oauth_client_id=oauth_client_id,
+        oauth_client_secret=oauth_client_secret,
+        oauth_scopes=oauth_scopes,
     )

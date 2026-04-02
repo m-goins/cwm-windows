@@ -206,6 +206,39 @@ class TestLoadSettings:
         settings = load_settings()
         assert len(settings.columns) == 11
 
+    def test_oauth_only_no_api_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for key in self.REQUIRED_ENV:
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("CWM_BASE_URL", "https://api.example.com")
+        monkeypatch.setenv("CWM_COMPANY_ID", "testco")
+        monkeypatch.setenv("CWM_CLIENT_ID", "client789")
+        monkeypatch.setenv("CWM_OAUTH_AUTH_URL", "https://auth.example.com/authorize")
+        monkeypatch.setenv("CWM_OAUTH_TOKEN_URL", "https://auth.example.com/token")
+        monkeypatch.setenv("CWM_OAUTH_CLIENT_ID", "oauth-app-id")
+        settings = load_settings()
+        assert settings.has_oauth is True
+        assert settings.has_api_keys is False
+        assert settings.oauth_auth_url == "https://auth.example.com/authorize"
+
+    def test_no_auth_at_all_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for key in self.REQUIRED_ENV:
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("CWM_BASE_URL", "https://api.example.com")
+        monkeypatch.setenv("CWM_COMPANY_ID", "testco")
+        monkeypatch.setenv("CWM_CLIENT_ID", "client789")
+        with pytest.raises(ConfigError, match="No authentication configured"):
+            load_settings()
+
+    def test_both_auth_methods(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for key, value in self.REQUIRED_ENV.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setenv("CWM_OAUTH_AUTH_URL", "https://auth.example.com/authorize")
+        monkeypatch.setenv("CWM_OAUTH_TOKEN_URL", "https://auth.example.com/token")
+        monkeypatch.setenv("CWM_OAUTH_CLIENT_ID", "oauth-app-id")
+        settings = load_settings()
+        assert settings.has_oauth is True
+        assert settings.has_api_keys is True
+
     def test_connectwise_auth_prefix_extracts_company(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for key in self.REQUIRED_ENV:
             monkeypatch.delenv(key, raising=False)

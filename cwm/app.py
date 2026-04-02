@@ -16,6 +16,7 @@ from textual.widgets import Header
 
 from .api import APIError, ConnectWiseAPI
 from .config import Settings
+from .oauth import TokenData
 from .modals import (
     AssignFormResult,
     AssignModal,
@@ -80,10 +81,10 @@ class CWMApp(App[None]):
         Binding("space", "toggle_select", "Select", show=False),
     ]
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, token: TokenData | None = None):
         super().__init__()
         self.settings = settings
-        self.api = ConnectWiseAPI(settings)
+        self.api = ConnectWiseAPI(settings, token=token)
         self.state = AppState()
         self._ticket_reload_lock = asyncio.Lock()
         self._ticket_detail_lock = asyncio.Lock()

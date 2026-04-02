@@ -11,6 +11,7 @@ import httpx
 
 from .config import Settings
 from .models import Board, BoardStatus, Member, ServiceNote, TicketDetail, TicketFilters, TicketSummary, TimeEntry
+from .oauth import OAuthConfig, TokenData, is_token_expired, load_stored_token, refresh_token_async
 
 logger = logging.getLogger("cwm.api")
 
@@ -30,8 +31,18 @@ class APIError(RuntimeError):
 
 
 class ConnectWiseAPI:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, token: TokenData | None = None):
         self.settings = settings
+        self._token = token
+        self._oauth_config: OAuthConfig | None = None
+        if settings.has_oauth:
+            self._oauth_config = OAuthConfig(
+                auth_url=settings.oauth_auth_url,
+                token_url=settings.oauth_token_url,
+                client_id=settings.oauth_client_id,
+                client_secret=settings.oauth_client_secret,
+                scopes=settings.oauth_scopes,
+            )
         self.client = httpx.AsyncClient(
             base_url=settings.base_url,
             timeout=settings.timeout_seconds,
@@ -40,14 +51,27 @@ class ConnectWiseAPI:
         )
 
     def _build_headers(self) -> dict[str, str]:
-        auth = f"{self.settings.company_id}+{self.settings.public_key}:{self.settings.private_key}"
-        encoded = base64.b64encode(auth.encode()).decode()
-        return {
-            "Authorization": f"Basic {encoded}",
+        headers: dict[str, str] = {
             "clientId": self.settings.client_id,
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        if self._token:
+            headers["Authorization"] = f"{self._token.token_type} {self._token.access_token}"
+        else:
+            auth = f"{self.settings.company_id}+{self.settings.public_key}:{self.settings.private_key}"
+            encoded = base64.b64encode(auth.encode()).decode()
+            headers["Authorization"] = f"Basic {encoded}"
+        return headers
+
+    async def _ensure_valid_token(self) -> None:
+        if self._token is None or self._oauth_config is None:
+            return
+        if not is_token_expired(self._token):
+            return
+        logger.info("Access token expired, refreshing")
+        self._token = await refresh_token_async(self._oauth_config, self._token)
+        self.client.headers.update({"Authorization": f"{self._token.token_type} {self._token.access_token}"})
 
     async def close(self) -> None:
         await self.client.aclose()
@@ -60,6 +84,7 @@ class ConnectWiseAPI:
         params: dict[str, Any] | None = None,
         json: Any | None = None,
     ) -> Any:
+        await self._ensure_valid_token()
         logger.debug(
             "HTTP %s %s params=%s payload=%s",
             method,
