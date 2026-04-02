@@ -1,0 +1,86 @@
+Screen {
+  layout: vertical;
+}
+
+#workspace {
+  height: 1fr;
+}
+
+#queue-bar {
+  height: 2;
+  padding: 0 1;
+  background: $surface;
+  color: $text;
+  border-bottom: solid $panel;
+}
+
+#boards {
+  width: 26;
+}
+
+#tickets {
+  width: 1fr;
+}
+
+#detail {
+  width: 38;
+  padding: 1;
+  border: solid $accent;
+  overflow-y: auto;
+}
+
+#detail-body {
+  width: 1fr;
+  height: auto;
+}
+
+#center {
+  width: 1fr;
+}
+
+#bottom-bar {
+  height: 1;
+  layout: horizontal;
+  background: $panel-darken-1;
+  color: $text;
+}
+
+#status {
+  width: 1fr;
+  height: 1;
+  padding: 0 1;
+}
+
+#footer-help {
+  width: auto;
+  height: 1;
+  padding: 0 1;
+  content-align: right middle;
+  text-align: right;
+}
+
+#status,
+#footer-help {
+  background: $panel-darken-1;
+}
+
+#status {
+  height: 1;
+}
+
+#modal-body {
+  width: 80;
+  height: auto;
+  padding: 1 2;
+  background: $surface;
+  border: thick $accent;
+}
+
+#actions {
+  height: auto;
+}
+
+TextArea {
+  height: 8;
+  margin: 1 0;
+}
