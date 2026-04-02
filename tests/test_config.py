@@ -157,6 +157,26 @@ class TestLoadSettings:
         settings = load_settings()
         assert settings.verify_ssl is False
 
+    def test_refresh_interval_default_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for key, value in self.REQUIRED_ENV.items():
+            monkeypatch.setenv(key, value)
+        settings = load_settings()
+        assert settings.refresh_interval_seconds == 0
+
+    def test_refresh_interval_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for key, value in self.REQUIRED_ENV.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setenv("CWM_REFRESH_INTERVAL", "120")
+        settings = load_settings()
+        assert settings.refresh_interval_seconds == 120
+
+    def test_refresh_interval_invalid_defaults_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for key, value in self.REQUIRED_ENV.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setenv("CWM_REFRESH_INTERVAL", "abc")
+        settings = load_settings()
+        assert settings.refresh_interval_seconds == 0
+
     def test_connectwise_auth_prefix_extracts_company(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for key in self.REQUIRED_ENV:
             monkeypatch.delenv(key, raising=False)

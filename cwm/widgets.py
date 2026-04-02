@@ -29,20 +29,28 @@ class TicketTable(DataTable):
         super().__init__(*args, cursor_type="row", zebra_stripes=True, **kwargs)
 
     def on_mount(self) -> None:
-        self.add_columns("Opened", "ID", "Pri", "Age", "Status", "Company", "Summary", "Tech", "SLA", "Updated")
+        self.add_columns("Opened", "ID", "Pri", "Age", "Status", "Company", "Summary", "Tech", "Contact", "SLA", "Updated")
 
-    def set_tickets(self, tickets: list[TicketSummary], selected_ticket_id: int | None = None) -> None:
+    def set_tickets(
+        self,
+        tickets: list[TicketSummary],
+        selected_ticket_id: int | None = None,
+        selected_ids: set[int] | None = None,
+    ) -> None:
         self.clear(columns=False)
+        marks = selected_ids or set()
         for ticket in tickets:
+            id_label = f"*{ticket.id}" if ticket.id in marks else str(ticket.id)
             self.add_row(
                 ticket.date_entered,
-                str(ticket.id),
+                id_label,
                 ticket.priority_badge,
                 ticket.age_badge,
                 ticket.status_name,
                 ticket.company_name,
                 ticket.summary,
                 ticket.owner_name,
+                ticket.contact_name or "-",
                 ticket.sla_badge,
                 ticket.last_updated,
                 key=str(ticket.id),

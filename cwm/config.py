@@ -23,6 +23,7 @@ class Settings:
     timeout_seconds: float = 30.0
     log_path: str = str(Path.home() / ".local" / "state" / "cwm" / "cwm.log")
     log_level: str = "DEBUG"
+    refresh_interval_seconds: int = 0
 
     @property
     def masked_summary(self) -> str:
@@ -154,6 +155,15 @@ def load_settings(config_path: str | None = None) -> Settings:
         file_config.get("CWM_LOG_LEVEL"),
         file_config.get("log_level"),
     ) or "DEBUG"
+    refresh_interval_text = _first_nonempty(
+        env.get("CWM_REFRESH_INTERVAL"),
+        file_config.get("CWM_REFRESH_INTERVAL"),
+        file_config.get("refresh_interval"),
+    ) or "0"
+    try:
+        refresh_interval = max(0, int(refresh_interval_text))
+    except ValueError:
+        refresh_interval = 0
 
     missing = [
         name
@@ -183,4 +193,5 @@ def load_settings(config_path: str | None = None) -> Settings:
         verify_ssl=verify_ssl,
         log_path=log_path,
         log_level=log_level,
+        refresh_interval_seconds=refresh_interval,
     )

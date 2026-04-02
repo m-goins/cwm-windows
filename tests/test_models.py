@@ -207,6 +207,15 @@ class TestTicketFilters:
         assert "status=New" in summary
         assert "sla=breached" in summary
 
+    def test_my_tickets_summary(self) -> None:
+        filters = TicketFilters(my_tickets_only=True, member_identifier="jdoe")
+        summary = filters.summary()
+        assert "mine=jdoe" in summary
+
+    def test_my_tickets_not_in_summary_when_off(self) -> None:
+        filters = TicketFilters(my_tickets_only=False, member_identifier="jdoe")
+        assert "mine" not in filters.summary()
+
 
 class TestTicketSummary:
     PAYLOAD = {
@@ -273,3 +282,37 @@ class TestTicketSummary:
         ticket = TicketSummary.from_api(self.PAYLOAD)
         assert ticket.matches(TicketFilters(tech_query="Jane")) is True
         assert ticket.matches(TicketFilters(tech_query="Bob")) is False
+
+    def test_contact_name_from_api(self) -> None:
+        payload = {**self.PAYLOAD, "contactName": "Alice Smith"}
+        ticket = TicketSummary.from_api(payload)
+        assert ticket.contact_name == "Alice Smith"
+
+    def test_contact_name_empty_default(self) -> None:
+        ticket = TicketSummary.from_api(self.PAYLOAD)
+        assert ticket.contact_name == ""
+
+    def test_contact_name_from_ref(self) -> None:
+        payload = {**self.PAYLOAD, "contact": {"name": "Bob Jones"}}
+        ticket = TicketSummary.from_api(payload)
+        assert ticket.contact_name == "Bob Jones"
+
+    def test_matches_my_tickets_filter(self) -> None:
+        ticket = TicketSummary.from_api(self.PAYLOAD)
+        filters = TicketFilters(my_tickets_only=True, member_identifier="Jane")
+        assert ticket.matches(filters) is True
+
+    def test_matches_my_tickets_filter_no_match(self) -> None:
+        ticket = TicketSummary.from_api(self.PAYLOAD)
+        filters = TicketFilters(my_tickets_only=True, member_identifier="Bob")
+        assert ticket.matches(filters) is False
+
+    def test_matches_my_tickets_disabled(self) -> None:
+        ticket = TicketSummary.from_api(self.PAYLOAD)
+        filters = TicketFilters(my_tickets_only=False, member_identifier="Bob")
+        assert ticket.matches(filters) is True
+
+    def test_matches_my_tickets_no_identifier(self) -> None:
+        ticket = TicketSummary.from_api(self.PAYLOAD)
+        filters = TicketFilters(my_tickets_only=True, member_identifier="")
+        assert ticket.matches(filters) is False

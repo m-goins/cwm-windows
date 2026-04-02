@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from .models import Board, BoardStatus, Member, TicketDetail, TicketFilters, TicketSummary
 
@@ -18,3 +19,7 @@ class AppState:
     ticket_limit: int = 100
     status_message: str = ""
     selected_ticket: TicketDetail | None = None
+    selected_ticket_ids: set[int] = field(default_factory=set)
+    last_refresh_at: datetime | None = None
+    global_search_active: bool = False
+    global_search_query: str = ""

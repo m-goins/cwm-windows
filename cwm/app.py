@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Coroutine
 import logging
-from datetime import datetime
+import shutil
+import subprocess
+from datetime import datetime, timezone
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -17,9 +19,13 @@ from .config import Settings
 from .modals import (
     AssignFormResult,
     AssignModal,
+    CreateTicketFormResult,
+    CreateTicketModal,
     FilterModal,
     NoteFormResult,
     NoteModal,
+    SearchFormResult,
+    SearchModal,
     StatusFormResult,
     StatusModal,
     TimeFormResult,
@@ -30,6 +36,18 @@ from .state import AppState
 from .widgets import BoardTable, FooterHelp, QueueBar, StatusBar, TicketDetailView, TicketTable
 
 logger = logging.getLogger("cwm.app")
+
+
+def _copy_to_clipboard(text: str) -> bool:
+    for cmd in ["wl-copy", "xclip -selection clipboard", "xsel --clipboard --input"]:
+        parts = cmd.split()
+        if shutil.which(parts[0]):
+            try:
+                subprocess.run(parts, input=text.encode(), check=True, timeout=5)
+                return True
+            except (subprocess.SubprocessError, OSError):
+                continue
+    return False
 
 
 class CWMApp(App[None]):
@@ -55,7 +73,11 @@ class CWMApp(App[None]):
         Binding("t", "log_time", "Time", show=False),
         Binding("a", "assign_ticket", "Assign", show=False),
         Binding("s", "change_status", "Status", show=False),
-        Binding("question_mark", "show_help", "Help", show=False),
+        Binding("m", "toggle_my_tickets", "My Tickets", show=False),
+        Binding("question_mark", "global_search", "Search", show=False),
+        Binding("w", "create_ticket", "New Ticket", show=False),
+        Binding("y", "copy_ticket", "Copy", show=False),
+        Binding("space", "toggle_select", "Select", show=False),
     ]
 
     def __init__(self, settings: Settings):
@@ -69,6 +91,7 @@ class CWMApp(App[None]):
         self._closing = False
         self._reload_task: asyncio.Task[None] | None = None
         self._detail_task: asyncio.Task[None] | None = None
+        self._auto_refresh_task: asyncio.Task[None] | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
 
     def compose(self) -> ComposeResult:
@@ -92,15 +115,20 @@ class CWMApp(App[None]):
         except NoMatches:
             return
         self._refresh_footer()
+        if self.settings.refresh_interval_seconds > 0:
+            self._auto_refresh_task = asyncio.create_task(self._auto_refresh_loop())
 
     async def on_unmount(self) -> None:
         self._closing = True
         self._cancel_task(self._reload_task)
         self._cancel_task(self._detail_task)
+        self._cancel_task(self._auto_refresh_task)
         for task in list(self._background_tasks):
             self._cancel_task(task)
         logger.info("App unmount")
         await self.api.close()
+
+    # -- task management -------------------------------------------------------
 
     def _cancel_task(self, task: asyncio.Task[None] | None) -> None:
         if task is not None and not task.done():
@@ -154,24 +182,37 @@ class CWMApp(App[None]):
         except Exception:
             logger.exception("Detail load failed for ticket=%s reason=%s", ticket_id, reason)
 
+    async def _auto_refresh_loop(self) -> None:
+        interval = self.settings.refresh_interval_seconds
+        logger.info("Auto-refresh enabled, interval=%ss", interval)
+        while not self._closing:
+            await asyncio.sleep(interval)
+            if not self._closing:
+                logger.info("Auto-refresh triggered")
+                self._schedule_reload("auto-refresh")
+
+    # -- UI helpers ------------------------------------------------------------
+
     def _refresh_footer(self) -> None:
         if self._closing:
             return
         focused = self.focused
         if focused is None:
-            context = "j/k move | h/l pane | o/u/i sort | x SLA | / filters | c clear | [ ] window | g refresh | q quit"
+            context = "j/k move | h/l pane | o/u/i sort | m mine | x SLA | / filter | ? search | w new | y copy | g refresh | q quit"
         elif focused.id == "boards":
-            context = "j/k board | l tickets | o/u/i sort | x SLA | / filters | c clear | [ ] window | g refresh | q quit"
+            context = "j/k board | l tickets | m mine | x SLA | / filter | ? search | w new | g refresh | q quit"
         elif focused.id == "tickets":
-            context = "j/k tickets | h/l pane | Enter detail | o/u/i sort | x SLA | / filters | c clear | [ ] window | n/t/a/s mutate"
+            context = "j/k ticket | h/l pane | Enter detail | space select | o/u/i sort | m mine | / filter | n/t/a/s mutate"
         else:
-            context = "j/k detail | h tickets | o/u/i sort | x SLA | / filters | c clear | [ ] window | g refresh | n/t/a/s mutate | q quit"
+            context = "j/k scroll | h tickets | m mine | / filter | ? search | g refresh | n/t/a/s mutate | q back"
         try:
             self.query_one(FooterHelp).set_context(context)
         except NoMatches:
             return
 
     def _active_board_name(self) -> str:
+        if self.state.global_search_active:
+            return f"search: {self.state.global_search_query}"
         if self.state.filters.board_id is None:
             return "-"
         board = next((item for item in self.state.boards if item.id == self.state.filters.board_id), None)
@@ -186,15 +227,22 @@ class CWMApp(App[None]):
         company_filter = self.state.filters.company_query or "all"
         tech_filter = self.state.filters.tech_query or "all"
         sla_filter = "breached" if self.state.filters.sla_breached_only else "all"
+        mine_filter = "yes" if self.state.filters.my_tickets_only else "all"
         ticket_count = len(self.state.displayed_tickets)
         window = f"{ticket_count} shown (limit {self.state.ticket_limit})"
         if ticket_count >= self.state.ticket_limit:
             window = f"first {ticket_count} shown"
         selected_label = f"#{selected}" if selected is not None else "-"
+        bulk_count = len(self.state.selected_ticket_ids)
+        bulk_label = f" | bulk: {bulk_count}" if bulk_count > 0 else ""
+        refresh_label = ""
+        if self.state.last_refresh_at is not None:
+            refresh_label = f" | refreshed: {self.state.last_refresh_at.strftime('%H:%M:%S')}"
         context = (
-            f"board: {self._active_board_name()} | status(/): {status_filter} | company(/): {company_filter} | "
-            f"tech(/): {tech_filter} | sla(x): {sla_filter} | sort(o/u/i): {sort_summary} | window([ ]): {window} | "
-            f"selected: {selected_label}"
+            f"board: {self._active_board_name()} | mine(m): {mine_filter} | status(/): {status_filter} | "
+            f"company(/): {company_filter} | tech(/): {tech_filter} | sla(x): {sla_filter} | "
+            f"sort(o/u/i): {sort_summary} | window([ ]): {window} | "
+            f"selected: {selected_label}{bulk_label}{refresh_label}"
         )
         try:
             self.query_one(QueueBar).set_context(context)
@@ -270,9 +318,11 @@ class CWMApp(App[None]):
         self.state.displayed_tickets = tickets
         table = self.query_one(TicketTable)
         self._suspend_highlight_events = True
-        table.set_tickets(tickets, selected_ticket_id=selected_ticket_id)
+        table.set_tickets(tickets, selected_ticket_id=selected_ticket_id, selected_ids=self.state.selected_ticket_ids)
         self._suspend_highlight_events = False
         self._update_title()
+
+    # -- data loading ----------------------------------------------------------
 
     async def _ensure_members(self) -> list[Member]:
         if not self.state.members:
@@ -292,6 +342,8 @@ class CWMApp(App[None]):
             board_table = self.query_one(BoardTable)
             if boards:
                 self.state.filters.board_id = boards[0].id
+                if self.settings.member_identifier:
+                    self.state.filters.member_identifier = self.settings.member_identifier
                 self._update_title()
             self._suspend_highlight_events = True
             board_table.set_boards(boards)
@@ -308,6 +360,9 @@ class CWMApp(App[None]):
 
     async def reload_tickets(self) -> None:
         async with self._ticket_reload_lock:
+            if self.state.global_search_active:
+                await self._reload_search_results()
+                return
             board_id = self.state.filters.board_id
             if board_id is None:
                 return
@@ -323,6 +378,7 @@ class CWMApp(App[None]):
                     page_size=100,
                     limit=self.state.ticket_limit,
                 )
+                self.state.last_refresh_at = datetime.now(timezone.utc)
                 selected_ticket_id = self.state.selected_ticket.ticket.id if self.state.selected_ticket is not None else None
                 self.state.tickets = tickets
                 self._render_tickets(selected_ticket_id=selected_ticket_id)
@@ -347,6 +403,30 @@ class CWMApp(App[None]):
             finally:
                 self._suspend_highlight_events = False
 
+    async def _reload_search_results(self) -> None:
+        query = self.state.global_search_query
+        self._set_status(f"Searching for '{query}'...")
+        self._update_title()
+        try:
+            tickets = await self.api.search_tickets(query, limit=self.state.ticket_limit)
+            filtered = [t for t in tickets if t.matches(self.state.filters)]
+            self.state.last_refresh_at = datetime.now(timezone.utc)
+            self.state.tickets = filtered
+            self._render_tickets()
+            if self.state.displayed_tickets:
+                await self.load_ticket_detail(self.state.displayed_tickets[0].id)
+                self._set_status(f"Search '{query}': {len(filtered)} tickets.")
+            else:
+                self.state.selected_ticket = None
+                try:
+                    self.query_one(TicketDetailView).set_placeholder("No tickets match the search.")
+                except NoMatches:
+                    return
+                self._set_status(f"Search '{query}': no results.")
+        except APIError as exc:
+            logger.error("Search failed for '%s': %s", query, exc)
+            self._set_status(str(exc))
+
     async def load_ticket_detail(self, ticket_id: int) -> None:
         async with self._ticket_detail_lock:
             try:
@@ -365,6 +445,8 @@ class CWMApp(App[None]):
             except APIError as exc:
                 logger.error("Detail load failed for ticket=%s: %s", ticket_id, exc)
                 self._set_status(str(exc))
+
+    # -- resolvers -------------------------------------------------------------
 
     def _resolve_status_id(self, query: str, statuses: list[BoardStatus]) -> int | None:
         text = query.strip().lower()
@@ -401,6 +483,55 @@ class CWMApp(App[None]):
         preview = ", ".join(status.name for status in matches[:8]) or "none"
         raise APIError(f"Status lookup for '{query}' is ambiguous. Matches: {preview}")
 
+    # -- actions: navigation ---------------------------------------------------
+
+    def action_move_down(self) -> None:
+        focused = self.focused
+        if focused is not None and hasattr(focused, "action_cursor_down"):
+            focused.action_cursor_down()
+            return
+        if focused is not None and focused.id == "detail":
+            focused.scroll_down(animate=False)
+
+    def action_move_up(self) -> None:
+        focused = self.focused
+        if focused is not None and hasattr(focused, "action_cursor_up"):
+            focused.action_cursor_up()
+            return
+        if focused is not None and focused.id == "detail":
+            focused.scroll_up(animate=False)
+
+    def action_focus_left(self) -> None:
+        focused = self.focused
+        if focused is None or focused.id == "detail":
+            self.query_one(TicketTable).focus()
+        elif focused.id == "tickets":
+            self.query_one(BoardTable).focus()
+        self.call_after_refresh(self._refresh_footer)
+
+    def action_focus_right(self) -> None:
+        focused = self.focused
+        if focused is None or focused.id == "boards":
+            self.query_one(TicketTable).focus()
+        elif focused.id == "tickets":
+            self.query_one(TicketDetailView).focus()
+        self.call_after_refresh(self._refresh_footer)
+
+    async def action_focus_detail(self) -> None:
+        self.query_one(TicketDetailView).focus()
+        self._refresh_footer()
+
+    def action_quit_or_back(self) -> None:
+        if self.state.global_search_active:
+            self._exit_search_mode()
+            return
+        if len(self.screen_stack) > 1:
+            self.pop_screen()
+            return
+        self.exit()
+
+    # -- actions: sorting and filtering ----------------------------------------
+
     async def action_refresh_data(self) -> None:
         self._schedule_reload("manual refresh")
 
@@ -436,11 +567,28 @@ class CWMApp(App[None]):
         self._set_status(f"SLA filter set to {state}.")
         self._schedule_reload("sla filter toggled")
 
+    def action_toggle_my_tickets(self) -> None:
+        if not self.state.filters.member_identifier:
+            self._set_status("No member_identifier configured. Set CWM_MEMBER_IDENTIFIER.")
+            return
+        self.state.filters.my_tickets_only = not self.state.filters.my_tickets_only
+        self._update_title()
+        if self.state.filters.my_tickets_only:
+            self._set_status(f"Showing my tickets ({self.state.filters.member_identifier}).")
+        else:
+            self._set_status("Showing all tickets.")
+        self._schedule_reload("my tickets toggled")
+
     def action_clear_filters(self) -> None:
         board_id = self.state.filters.board_id
-        self.state.filters = TicketFilters(board_id=board_id)
+        member_id = self.state.filters.member_identifier
+        self.state.filters = TicketFilters(board_id=board_id, member_identifier=member_id)
+        self.state.selected_ticket_ids.clear()
+        if self.state.global_search_active:
+            self._exit_search_mode()
+            return
         self._update_title()
-        self._set_status("Cleared filters.")
+        self._set_status("Cleared filters and selections.")
         self._schedule_reload("filters cleared")
 
     def action_increase_window(self) -> None:
@@ -463,16 +611,42 @@ class CWMApp(App[None]):
         self._set_status(f"Ticket window decreased to {next_limit}.")
         self._schedule_reload("window decreased")
 
+    # -- actions: filter modal -------------------------------------------------
+
     def _handle_filter_result(self, updated: TicketFilters | None) -> None:
         if updated is None:
             return
         updated.board_id = self.state.filters.board_id
+        updated.member_identifier = self.state.filters.member_identifier
+        updated.my_tickets_only = self.state.filters.my_tickets_only
         self.state.filters = updated
         logger.info("Filters updated to %s", self.state.filters.summary())
         self._schedule_reload("filter update")
 
     async def action_edit_filters(self) -> None:
         self.push_screen(FilterModal(self.state.filters), callback=self._handle_filter_result)
+
+    # -- actions: global search ------------------------------------------------
+
+    def _handle_search_result(self, result: SearchFormResult | None) -> None:
+        if result is None:
+            return
+        self.state.global_search_active = True
+        self.state.global_search_query = result.query
+        self.state.selected_ticket_ids.clear()
+        self._schedule_reload("global search")
+
+    def _exit_search_mode(self) -> None:
+        self.state.global_search_active = False
+        self.state.global_search_query = ""
+        self._update_title()
+        self._set_status("Exited search mode.")
+        self._schedule_reload("exit search")
+
+    async def action_global_search(self) -> None:
+        self.push_screen(SearchModal(), callback=self._handle_search_result)
+
+    # -- actions: notes --------------------------------------------------------
 
     async def _submit_note(self, ticket_id: int, result: NoteFormResult) -> None:
         try:
@@ -500,6 +674,8 @@ class CWMApp(App[None]):
             self._set_status("Select a ticket first.")
             return
         self.push_screen(NoteModal(), callback=lambda result: self._handle_note_result(ticket_id, result))
+
+    # -- actions: time entries -------------------------------------------------
 
     async def _submit_time_entry(self, ticket_id: int, result: TimeFormResult) -> None:
         try:
@@ -536,6 +712,8 @@ class CWMApp(App[None]):
             callback=lambda result: self._handle_time_result(ticket_id, result),
         )
 
+    # -- actions: assign -------------------------------------------------------
+
     async def _submit_assignment(self, ticket_id: int, member_query: str, members: list[Member]) -> None:
         try:
             member = self._resolve_member(member_query, members)
@@ -547,32 +725,54 @@ class CWMApp(App[None]):
         except APIError as exc:
             self._set_status(str(exc))
 
+    async def _submit_batch_assignment(self, ticket_ids: list[int], member_query: str) -> None:
+        try:
+            members = await self._ensure_members()
+            member = self._resolve_member(member_query, members)
+            logger.info("Batch assigning %s tickets to %s", len(ticket_ids), member.label())
+            for ticket_id in ticket_ids:
+                await self.api.assign_ticket(ticket_id, member.id)
+            self.state.selected_ticket_ids.clear()
+            self._schedule_reload("batch assignment")
+            self._set_status(f"Assigned {len(ticket_ids)} tickets to {member.label()}.")
+        except APIError as exc:
+            self._set_status(str(exc))
+
     def _handle_assign_result(
         self,
-        ticket_id: int,
+        ticket_ids: list[int],
         members: list[Member],
         result: AssignFormResult | None,
     ) -> None:
         if result is None:
             return
-        self._start_background_task(
-            self._submit_assignment(ticket_id, result.member_query, members),
-            f"assign ticket={ticket_id}",
-        )
+        if len(ticket_ids) == 1:
+            self._start_background_task(
+                self._submit_assignment(ticket_ids[0], result.member_query, members),
+                f"assign ticket={ticket_ids[0]}",
+            )
+        else:
+            self._start_background_task(
+                self._submit_batch_assignment(ticket_ids, result.member_query),
+                f"batch assign {len(ticket_ids)} tickets",
+            )
 
     async def action_assign_ticket(self) -> None:
-        ticket_id = self._selected_ticket_id()
-        if ticket_id is None:
+        ticket_ids = self._get_actionable_ticket_ids()
+        if not ticket_ids:
             self._set_status("Select a ticket first.")
             return
         try:
             members = await self._ensure_members()
+            label = f"Assign {len(ticket_ids)} tickets" if len(ticket_ids) > 1 else "Assign ticket"
             self.push_screen(
                 AssignModal(members),
-                callback=lambda result: self._handle_assign_result(ticket_id, members, result),
+                callback=lambda result: self._handle_assign_result(ticket_ids, members, result),
             )
         except APIError as exc:
             self._set_status(str(exc))
+
+    # -- actions: status -------------------------------------------------------
 
     async def _submit_status_change(self, ticket_id: int, status_query: str, statuses: list[BoardStatus]) -> None:
         try:
@@ -585,22 +785,40 @@ class CWMApp(App[None]):
         except APIError as exc:
             self._set_status(str(exc))
 
+    async def _submit_batch_status_change(self, ticket_ids: list[int], status_query: str, statuses: list[BoardStatus]) -> None:
+        try:
+            status = self._resolve_status(status_query, statuses)
+            logger.info("Batch status change for %s tickets to %s", len(ticket_ids), status.name)
+            for ticket_id in ticket_ids:
+                await self.api.update_ticket_status(ticket_id, status.id)
+            self.state.selected_ticket_ids.clear()
+            self._schedule_reload("batch status change")
+            self._set_status(f"Updated {len(ticket_ids)} tickets to {status.name}.")
+        except APIError as exc:
+            self._set_status(str(exc))
+
     def _handle_status_result(
         self,
-        ticket_id: int,
+        ticket_ids: list[int],
         statuses: list[BoardStatus],
         result: StatusFormResult | None,
     ) -> None:
         if result is None:
             return
-        self._start_background_task(
-            self._submit_status_change(ticket_id, result.status_query, statuses),
-            f"change status ticket={ticket_id}",
-        )
+        if len(ticket_ids) == 1:
+            self._start_background_task(
+                self._submit_status_change(ticket_ids[0], result.status_query, statuses),
+                f"change status ticket={ticket_ids[0]}",
+            )
+        else:
+            self._start_background_task(
+                self._submit_batch_status_change(ticket_ids, result.status_query, statuses),
+                f"batch status {len(ticket_ids)} tickets",
+            )
 
     async def action_change_status(self) -> None:
-        ticket_id = self._selected_ticket_id()
-        if ticket_id is None:
+        ticket_ids = self._get_actionable_ticket_ids()
+        if not ticket_ids:
             self._set_status("Select a ticket first.")
             return
         board_id = self.state.filters.board_id
@@ -611,57 +829,106 @@ class CWMApp(App[None]):
             statuses = await self._ensure_statuses(board_id)
             self.push_screen(
                 StatusModal(statuses),
-                callback=lambda result: self._handle_status_result(ticket_id, statuses, result),
+                callback=lambda result: self._handle_status_result(ticket_ids, statuses, result),
             )
         except APIError as exc:
             self._set_status(str(exc))
 
-    async def action_focus_detail(self) -> None:
-        self.query_one(TicketDetailView).focus()
-        self._refresh_footer()
+    # -- actions: ticket creation ----------------------------------------------
+
+    async def _submit_create_ticket(self, result: CreateTicketFormResult) -> None:
+        try:
+            companies = await self.api.search_companies(result.company_query)
+            if not companies:
+                self._set_status(f"No company found matching '{result.company_query}'.")
+                return
+            if len(companies) == 1:
+                company_id = int(companies[0]["id"])
+            else:
+                exact = [c for c in companies if c.get("name", "").lower() == result.company_query.lower()]
+                if len(exact) == 1:
+                    company_id = int(exact[0]["id"])
+                else:
+                    names = ", ".join(c.get("name", "?") for c in companies[:8])
+                    self._set_status(f"Ambiguous company '{result.company_query}'. Matches: {names}")
+                    return
+
+            board_id = self.state.filters.board_id
+            if board_id is None:
+                self._set_status("No board selected.")
+                return
+            ticket_id = await self.api.create_ticket(
+                summary=result.summary,
+                board_id=board_id,
+                company_id=company_id,
+                initial_description=result.initial_description,
+            )
+            self._schedule_reload("ticket created")
+            self._set_status(f"Created ticket #{ticket_id}.")
+        except APIError as exc:
+            self._set_status(str(exc))
+
+    def _handle_create_result(self, result: CreateTicketFormResult | None) -> None:
+        if result is None:
+            return
+        self._start_background_task(self._submit_create_ticket(result), "create ticket")
+
+    async def action_create_ticket(self) -> None:
+        if self.state.filters.board_id is None:
+            self._set_status("Select a board first.")
+            return
+        board_name = self._active_board_name()
+        self.push_screen(
+            CreateTicketModal(board_name=board_name),
+            callback=self._handle_create_result,
+        )
+
+    # -- actions: clipboard ----------------------------------------------------
+
+    def action_copy_ticket(self) -> None:
+        ticket_id = self._selected_ticket_id()
+        if ticket_id is None:
+            self._set_status("Select a ticket first.")
+            return
+        text = f"#{ticket_id}"
+        if _copy_to_clipboard(text):
+            self._set_status(f"Copied '{text}' to clipboard.")
+        else:
+            self._set_status(f"Clipboard not available. Ticket: {text}")
+
+    # -- actions: bulk select --------------------------------------------------
+
+    def _get_actionable_ticket_ids(self) -> list[int]:
+        if self.state.selected_ticket_ids:
+            return sorted(self.state.selected_ticket_ids)
+        ticket_id = self._selected_ticket_id()
+        return [ticket_id] if ticket_id is not None else []
+
+    def action_toggle_select(self) -> None:
+        ticket_id = self._selected_ticket_id()
+        if ticket_id is None:
+            return
+        if ticket_id in self.state.selected_ticket_ids:
+            self.state.selected_ticket_ids.discard(ticket_id)
+        else:
+            self.state.selected_ticket_ids.add(ticket_id)
+        selected_ticket_id = self._selected_ticket_id()
+        self._render_tickets(selected_ticket_id=selected_ticket_id)
+        count = len(self.state.selected_ticket_ids)
+        if count > 0:
+            self._set_status(f"{count} ticket(s) selected.")
+        else:
+            self._set_status("Selection cleared.")
+
+    # -- actions: help ---------------------------------------------------------
 
     def action_show_help(self) -> None:
         self._set_status(
-            "Keys: j/k move or scroll, h/l pane, o opened sort, u updated sort, i ticket sort, x SLA toggle, / filters, c clear, [ ] ticket window, g refresh, n/t/a/s mutate, q quit."
+            "Keys: j/k move, h/l pane, o/u/i sort, m mine, x SLA, / filter, ? search, "
+            "w new, y copy, space select, g refresh, n/t/a/s mutate, c clear, [ ] window, q quit"
         )
 
-    def action_move_down(self) -> None:
-        focused = self.focused
-        if focused is not None and hasattr(focused, "action_cursor_down"):
-            focused.action_cursor_down()
-            return
-        if focused is not None and focused.id == "detail":
-            focused.scroll_down(animate=False)
-
-    def action_move_up(self) -> None:
-        focused = self.focused
-        if focused is not None and hasattr(focused, "action_cursor_up"):
-            focused.action_cursor_up()
-            return
-        if focused is not None and focused.id == "detail":
-            focused.scroll_up(animate=False)
-
-    def action_focus_left(self) -> None:
-        focused = self.focused
-        if focused is None or focused.id == "detail":
-            self.query_one(TicketTable).focus()
-        elif focused.id == "tickets":
-            self.query_one(BoardTable).focus()
-        self.call_after_refresh(self._refresh_footer)
-
-    def action_focus_right(self) -> None:
-        focused = self.focused
-        if focused is None or focused.id == "boards":
-            self.query_one(TicketTable).focus()
-        elif focused.id == "tickets":
-            self.query_one(TicketDetailView).focus()
-        self.call_after_refresh(self._refresh_footer)
-
-    def action_quit_or_back(self) -> None:
-        if len(self.screen_stack) > 1:
-            self.pop_screen()
-            return
-        self.exit()
+    # -- events ----------------------------------------------------------------
 
     async def on_data_table_row_highlighted(self, event: TicketTable.RowHighlighted | BoardTable.RowHighlighted) -> None:
         if self._suspend_highlight_events:
@@ -673,7 +940,10 @@ class CWMApp(App[None]):
             board_id = int(str(row_key.value))
             if board_id != self.state.filters.board_id:
                 self.state.filters.board_id = board_id
-                self._schedule_reload("board highlight")
+                if self.state.global_search_active:
+                    self._exit_search_mode()
+                else:
+                    self._schedule_reload("board highlight")
             self._refresh_footer()
             return
         if event.data_table.id == "tickets":

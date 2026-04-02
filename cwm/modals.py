@@ -35,6 +35,18 @@ class StatusFormResult:
     status_query: str
 
 
+@dataclass(slots=True)
+class SearchFormResult:
+    query: str
+
+
+@dataclass(slots=True)
+class CreateTicketFormResult:
+    summary: str
+    company_query: str
+    initial_description: str
+
+
 class FilterModal(ModalScreen[TicketFilters | None]):
     BINDINGS = [("escape", "cancel", "Cancel")]
 
@@ -259,3 +271,76 @@ class StatusModal(ModalScreen[StatusFormResult | None]):
             self.query_one(Label).update("Update status (status query required)")
             return
         self.dismiss(StatusFormResult(status_query=query))
+
+
+class SearchModal(ModalScreen[SearchFormResult | None]):
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label("Search tickets across all boards"),
+            Input(placeholder="Search summary...", id="search-query"),
+            Horizontal(
+                Button("Search", variant="primary", id="search"),
+                Button("Cancel", id="cancel"),
+            ),
+            id="modal-body",
+        )
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
+            return
+        query = self.query_one("#search-query", Input).value.strip()
+        if not query:
+            self.query_one(Label).update("Search tickets (query required)")
+            return
+        self.dismiss(SearchFormResult(query=query))
+
+
+class CreateTicketModal(ModalScreen[CreateTicketFormResult | None]):
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, board_name: str = "") -> None:
+        super().__init__()
+        self.board_name = board_name
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label(f"Create ticket on {self.board_name}" if self.board_name else "Create ticket"),
+            Input(placeholder="Summary (required)", id="ticket-summary"),
+            Input(placeholder="Company name (required)", id="company-query"),
+            TextArea(id="ticket-description"),
+            Horizontal(
+                Button("Create", variant="primary", id="create"),
+                Button("Cancel", id="cancel"),
+            ),
+            id="modal-body",
+        )
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
+            return
+        summary = self.query_one("#ticket-summary", Input).value.strip()
+        if not summary:
+            self.query_one(Label).update("Create ticket (summary required)")
+            return
+        company_query = self.query_one("#company-query", Input).value.strip()
+        if not company_query:
+            self.query_one(Label).update("Create ticket (company required)")
+            return
+        description = self.query_one("#ticket-description", TextArea).text.strip()
+        self.dismiss(
+            CreateTicketFormResult(
+                summary=summary,
+                company_query=company_query,
+                initial_description=description,
+            )
+        )

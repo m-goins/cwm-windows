@@ -166,9 +166,13 @@ class TicketFilters:
     company_query: str = ""
     tech_query: str = ""
     sla_breached_only: bool = False
+    my_tickets_only: bool = False
+    member_identifier: str = ""
 
     def summary(self) -> str:
         parts: list[str] = []
+        if self.my_tickets_only:
+            parts.append(f"mine={self.member_identifier or '?'}")
         if self.status_query:
             parts.append(f"status={self.status_query}")
         if self.company_query:
@@ -195,6 +199,7 @@ class TicketSummary:
     is_in_sla: bool | None
     date_entered: str
     opened_at: str
+    contact_name: str
     raw: dict[str, Any] = field(repr=False)
 
     @classmethod
@@ -224,6 +229,7 @@ class TicketSummary:
             is_in_sla=payload.get("isInSla"),
             date_entered=format_dt(opened_at),
             opened_at=opened_at,
+            contact_name=coalesce(payload.get("contactName"), ref_name(payload.get("contact"))),
             raw=payload,
         )
 
@@ -275,7 +281,11 @@ class TicketSummary:
         tech_match = filters.tech_query.lower() in self.owner_name.lower()
         status_match = filters.status_query.lower() in self.status_name.lower()
         sla_match = (not filters.sla_breached_only) or self.is_sla_breached()
-        return company_match and tech_match and status_match and sla_match
+        member_match = (not filters.my_tickets_only) or (
+            bool(filters.member_identifier)
+            and filters.member_identifier.lower() in self.owner_name.lower()
+        )
+        return company_match and tech_match and status_match and sla_match and member_match
 
 
 @dataclass(slots=True)

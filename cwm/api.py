@@ -14,6 +14,10 @@ from .models import Board, BoardStatus, Member, ServiceNote, TicketDetail, Ticke
 
 logger = logging.getLogger("cwm.api")
 
+_MAX_RETRIES = 3
+_RETRY_BACKOFF_BASE = 1.0
+_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+
 
 class APIError(RuntimeError):
     """Raised on ConnectWise API errors."""
@@ -63,32 +67,59 @@ class ConnectWiseAPI:
             sorted((params or {}).keys()),
             sorted(json.keys()) if isinstance(json, dict) else type(json).__name__ if json is not None else "none",
         )
-        try:
-            response = await self.client.request(method, path, params=params, json=json)
-        except httpx.TimeoutException as exc:
-            logger.exception("Timeout on %s %s", method, path)
-            raise APIError(f"{method} {path} timed out: {exc}") from exc
-        except httpx.RequestError as exc:
-            logger.exception("Request error on %s %s", method, path)
-            raise APIError(f"{method} {path} request failed: {exc}") from exc
-        logger.debug("HTTP %s %s -> %s", method, path, response.status_code)
-        if response.status_code >= 400:
+        last_exc: Exception | None = None
+        for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                payload = response.json()
+                response = await self.client.request(method, path, params=params, json=json)
+            except httpx.TimeoutException as exc:
+                last_exc = APIError(f"{method} {path} timed out: {exc}")
+                if attempt < _MAX_RETRIES:
+                    delay = _RETRY_BACKOFF_BASE * (2 ** (attempt - 1))
+                    logger.warning("Timeout on %s %s (attempt %s/%s), retrying in %.1fs", method, path, attempt, _MAX_RETRIES, delay)
+                    await asyncio.sleep(delay)
+                    continue
+                logger.exception("Timeout on %s %s (final attempt)", method, path)
+                raise last_exc from exc
+            except httpx.RequestError as exc:
+                last_exc = APIError(f"{method} {path} request failed: {exc}")
+                if attempt < _MAX_RETRIES:
+                    delay = _RETRY_BACKOFF_BASE * (2 ** (attempt - 1))
+                    logger.warning("Request error on %s %s (attempt %s/%s), retrying in %.1fs", method, path, attempt, _MAX_RETRIES, delay)
+                    await asyncio.sleep(delay)
+                    continue
+                logger.exception("Request error on %s %s (final attempt)", method, path)
+                raise last_exc from exc
+
+            logger.debug("HTTP %s %s -> %s", method, path, response.status_code)
+
+            if response.status_code in _RETRYABLE_STATUS_CODES and attempt < _MAX_RETRIES:
+                delay = _RETRY_BACKOFF_BASE * (2 ** (attempt - 1))
+                logger.warning(
+                    "HTTP %s %s returned %s (attempt %s/%s), retrying in %.1fs",
+                    method, path, response.status_code, attempt, _MAX_RETRIES, delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            if response.status_code >= 400:
+                try:
+                    payload = response.json()
+                except ValueError:
+                    payload = response.text
+                logger.error("HTTP %s %s failed: %s", method, path, payload)
+                raise APIError(
+                    f"{method} {path} failed with HTTP {response.status_code}: {payload}",
+                    status_code=response.status_code,
+                    payload=payload,
+                )
+            if not response.content:
+                return {}
+            try:
+                return response.json()
             except ValueError:
-                payload = response.text
-            logger.error("HTTP %s %s failed: %s", method, path, payload)
-            raise APIError(
-                f"{method} {path} failed with HTTP {response.status_code}: {payload}",
-                status_code=response.status_code,
-                payload=payload,
-            )
-        if not response.content:
-            return {}
-        try:
-            return response.json()
-        except ValueError:
-            return response.text
+                return response.text
+
+        raise last_exc or APIError(f"{method} {path} failed after {_MAX_RETRIES} retries")
 
     async def _paged_get(
         self,
@@ -163,6 +194,8 @@ class ConnectWiseAPI:
                 "status",
                 "owner",
                 "priority",
+                "contactName",
+                "contact",
                 "dateEntered",
                 "dateResponded",
                 "dateUpdated",
@@ -293,3 +326,55 @@ class ConnectWiseAPI:
         patch = [{"op": "replace", "path": "status", "value": {"id": status_id}}]
         logger.info("Updating ticket=%s status_id=%s", ticket_id, status_id)
         await self._request("PATCH", f"/service/tickets/{ticket_id}", json=patch)
+
+    async def search_tickets(self, query: str, *, limit: int = 100) -> list[TicketSummary]:
+        fields = ",".join(
+            [
+                "id", "summary", "company", "board", "status", "owner", "priority",
+                "contactName", "contact", "dateEntered", "dateResponded", "dateUpdated",
+                "isInSla", "slaStatus", "resources", "_info",
+            ]
+        )
+        escaped = query.replace('"', '\\"')
+        conditions = f'summary contains "{escaped}"'
+        params: dict[str, Any] = {
+            "fields": fields,
+            "conditions": conditions,
+            "orderBy": "id desc",
+        }
+        payload = await self._paged_get("/service/tickets", params=params, page_size=100, limit=limit)
+        tickets = [TicketSummary.from_api(item) for item in payload]
+        logger.info("Search for '%s' returned %s tickets", query, len(tickets))
+        return tickets
+
+    async def search_companies(self, query: str, *, limit: int = 25) -> list[dict[str, Any]]:
+        escaped = query.replace('"', '\\"')
+        params: dict[str, Any] = {
+            "fields": "id,identifier,name",
+            "conditions": f'name contains "{escaped}"',
+            "orderBy": "name asc",
+        }
+        results = await self._paged_get("/company/companies", params=params, limit=limit)
+        logger.info("Company search for '%s' returned %s results", query, len(results))
+        return results
+
+    async def create_ticket(
+        self,
+        *,
+        summary: str,
+        board_id: int,
+        company_id: int,
+        initial_description: str = "",
+    ) -> int:
+        payload: dict[str, Any] = {
+            "summary": summary,
+            "board": {"id": board_id},
+            "company": {"id": company_id},
+        }
+        if initial_description:
+            payload["initialDescription"] = initial_description
+        logger.info("Creating ticket on board=%s company=%s", board_id, company_id)
+        result = await self._request("POST", "/service/tickets", json=payload)
+        ticket_id = int(result["id"])
+        logger.info("Created ticket #%s", ticket_id)
+        return ticket_id
