@@ -4,11 +4,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-DEFAULT_CONFIG="/home/mgoins/cwaudit/configurations/api_configs/config.json"
+# Config resolution: CWM_CONFIG_PATH env var > ~/.config/cwm/config.json
+DEFAULT_CONFIG="${HOME}/.config/cwm/config.json"
 CONFIG_PATH="${CWM_CONFIG_PATH:-$DEFAULT_CONFIG}"
-LOG_DIR="${CWM_LOG_DIR:-$SCRIPT_DIR/logs}"
-export CWM_LOG_PATH="${CWM_LOG_PATH:-$LOG_DIR/cwm.log}"
-mkdir -p "$LOG_DIR"
+
+if [[ ! -f "$CONFIG_PATH" ]]; then
+  echo "Config not found: $CONFIG_PATH" >&2
+  echo "Create ~/.config/cwm/config.json or set CWM_CONFIG_PATH." >&2
+  exit 1
+fi
 
 if [[ ! -d .venv ]]; then
   python3 -m venv .venv
@@ -27,5 +31,4 @@ fi
 
 echo "Starting cwm"
 echo "Config: $CONFIG_PATH"
-echo "Log: $CWM_LOG_PATH"
 exec python -m cwm "${args[@]}"

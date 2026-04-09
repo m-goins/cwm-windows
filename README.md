@@ -30,21 +30,21 @@ The JSON config loader also accepts `CW_URL` for existing MDC config files.
 ## Run
 
 ```bash
-python -m cwm
+python -m cwm --config ~/.config/cwm/config.json
 ```
 
 ## Startup script
 
 ```bash
-cd /home/mgoins/cwm
 chmod +x start_cwm.sh
 ./start_cwm.sh
 ```
 
-Defaults:
+The startup script looks for config in this order:
+1. `CWM_CONFIG_PATH` env var (if set)
+2. `~/.config/cwm/config.json`
 
-- config: `/home/mgoins/cwaudit/configurations/api_configs/config.json`
-- log: `/home/mgoins/cwm/logs/cwm.log`
+Default log path: `~/.local/state/cwm/cwm.log` (override with `CWM_LOG_PATH`)
 
 ## Keys
 
