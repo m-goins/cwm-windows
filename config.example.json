@@ -1,0 +1,8 @@
+{
+  "CWM_BASE_URL": "https://api-na.myconnectwise.net/v4_6_release/apis/3.0",
+  "CWM_COMPANY_ID": "yourcompany",
+  "CWM_PUBLIC_KEY": "your-public-key",
+  "CWM_PRIVATE_KEY": "your-private-key",
+  "CWM_CLIENT_ID": "your-client-id-uuid",
+  "CWM_MEMBER_IDENTIFIER": "jsmith"
+}

@@ -4,6 +4,13 @@ Keyboard-first ConnectWise Manage TUI built with Textual.
 
 ## Config
 
+Copy the example config and fill in your credentials:
+
+```bash
+mkdir -p ~/.config/cwm
+cp config.example.json ~/.config/cwm/config.json
+```
+
 Set these environment variables or pass `--config /path/to/config.json`:
 
 - `CWM_BASE_URL`
