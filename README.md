@@ -2,6 +2,18 @@
 
 Keyboard-first ConnectWise Manage TUI built with Textual.
 
+## Quick start
+
+```bash
+git clone https://github.com/m-goins/cwm.git
+cd cwm
+mkdir -p ~/.config/cwm
+cp config.example.json ~/.config/cwm/config.json
+# edit ~/.config/cwm/config.json with your CW credentials
+chmod +x start_cwm.sh
+./start_cwm.sh
+```
+
 ## Config
 
 Copy the example config and fill in your credentials:
