@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from platformdirs import user_log_dir
+
 
 class ConfigError(RuntimeError):
     """Raised when required config is missing or invalid."""
@@ -21,7 +23,7 @@ class Settings:
     member_identifier: str | None = None
     verify_ssl: bool = True
     timeout_seconds: float = 30.0
-    log_path: str = str(Path.home() / ".local" / "state" / "cwm" / "cwm.log")
+    log_path: str = str(Path(user_log_dir("cwm", ensure_exists=True)) / "cwm.log")
     log_level: str = "DEBUG"
     refresh_interval_seconds: int = 0
     columns: list[str] = field(default_factory=lambda: [
@@ -166,7 +168,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         env.get("CWM_LOG_PATH"),
         file_config.get("CWM_LOG_PATH"),
         file_config.get("log_path"),
-    ) or str(Path.home() / ".local" / "state" / "cwm" / "cwm.log")
+    ) or str(Path(user_log_dir("cwm", ensure_exists=True)) / "cwm.log")
     log_level = _first_nonempty(
         env.get("CWM_LOG_LEVEL"),
         file_config.get("CWM_LOG_LEVEL"),

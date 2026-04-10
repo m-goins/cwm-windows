@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Coroutine
 import logging
+import platform
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -39,8 +40,17 @@ from .widgets import BoardTable, FooterHelp, QueueBar, StatusBar, TicketDetailVi
 logger = logging.getLogger("cwm.app")
 
 
+def _clipboard_commands() -> list[str]:
+    system = platform.system()
+    if system == "Windows":
+        return ["clip"]
+    if system == "Darwin":
+        return ["pbcopy"]
+    return ["wl-copy", "xclip -selection clipboard", "xsel --clipboard --input"]
+
+
 def _copy_to_clipboard(text: str) -> bool:
-    for cmd in ["wl-copy", "xclip -selection clipboard", "xsel --clipboard --input"]:
+    for cmd in _clipboard_commands():
         parts = cmd.split()
         if shutil.which(parts[0]):
             try:
